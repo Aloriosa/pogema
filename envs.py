@@ -300,6 +300,19 @@ class PogemaLifeLong(Pogema):
         seeds = main_rng.integers(np.iinfo(np.int32).max, size=self.grid_config.num_agents)
         self.random_generators = [np.random.default_rng(seed) for seed in seeds]
 
+
+    def _generate_new_target(self, agent_idx):
+        if self.grid_config.possible_targets_xy is not None:
+            new_goal = generate_from_possible_targets(self.random_generators[agent_idx], 
+                                                     self.grid_config.possible_targets_xy, 
+                                                     self.grid.positions_xy[agent_idx])
+            return (new_goal[0] + self.grid_config.obs_radius, new_goal[1] + self.grid_config.obs_radius)
+        else:
+            return generate_new_target(self.random_generators[agent_idx],
+                                    self.grid.point_to_component,
+                                    self.grid.component_to_points,
+                                    self.grid.positions_xy[agent_idx])
+    """
     def _generate_new_target(self, agent_idx):
         if self.grid_config.non_random_possible_targets != False:
             print(f"\n\nnon_random_possible_targets is not implemented\n\n")
@@ -338,7 +351,9 @@ class PogemaLifeLong(Pogema):
                                     self.grid.point_to_component,
                                     self.grid.component_to_points,
                                     self.grid.positions_xy[agent_idx])
+    """
 
+    
     def step(self, action: list):
         assert len(action) == self.grid_config.num_agents
         rewards = []
