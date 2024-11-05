@@ -300,6 +300,7 @@ class PogemaLifeLong(Pogema):
         seeds = main_rng.integers(np.iinfo(np.int32).max, size=self.grid_config.num_agents)
         self.random_generators = [np.random.default_rng(seed) for seed in seeds]
 
+
     def _generate_new_target(self, agent_idx):
         if self.grid_config.possible_targets_xy is not None:
             new_goal = generate_from_possible_targets(self.random_generators[agent_idx], 
@@ -311,7 +312,48 @@ class PogemaLifeLong(Pogema):
                                     self.grid.point_to_component,
                                     self.grid.component_to_points,
                                     self.grid.positions_xy[agent_idx])
+    """
+    def _generate_new_target(self, agent_idx):
+        if self.grid_config.non_random_possible_targets != False:
+            print(f"\n\nnon_random_possible_targets is not implemented\n\n")
+            pass
+            '''
+            # for 2-agent envs
+            curr_other_goals = [i for idx, i in enumerate(self.grid.finishes_xy) if idx != agent_idx] #[agent_idx]
+            curr_pos = self.grid.positions_xy[agent_idx]
+            def _gen(rnd_generator, possible_positions, position):
+                new_x = rnd_generator.choice(possible_positions, 1)[0]
+                while new_target == position:
+                    new_target = rnd_generator.choice(possible_positions, 1)[0]
+                return new_target
 
+            
+            new_goal = _gen(self.random_generators[agent_idx],
+                              self.grid_config.non_random_possible_targets[agent_idx],
+                              self.grid.positions_xy[agent_idx][0])
+            
+            
+        
+
+            
+            if new_goal == curr_pos:
+                new_goal = self.grid_config.possible_targets_xy[1]
+    
+            return (new_goal[0] + self.grid_config.obs_radius, new_goal[1] + self.grid_config.obs_radius)
+            '''
+        elif self.grid_config.possible_targets_xy is not None:
+            new_goal = generate_from_possible_targets(self.random_generators[agent_idx], 
+                                                     self.grid_config.possible_targets_xy, 
+                                                     self.grid.positions_xy[agent_idx])
+            return (new_goal[0] + self.grid_config.obs_radius, new_goal[1] + self.grid_config.obs_radius)
+        else:
+            return generate_new_target(self.random_generators[agent_idx],
+                                    self.grid.point_to_component,
+                                    self.grid.component_to_points,
+                                    self.grid.positions_xy[agent_idx])
+    """
+
+    
     def step(self, action: list):
         assert len(action) == self.grid_config.num_agents
         rewards = []
@@ -396,6 +438,7 @@ def _make_pogema(grid_config):
             env = ISRMetric(env)
             env = CSRMetric(env)
             env = EpLengthMetric(env)
+            env = SumOfCostsAndMakespanMetric(env)
         else:
             raise KeyError(f'Unknown on_target option: {grid_config.on_target}')
 

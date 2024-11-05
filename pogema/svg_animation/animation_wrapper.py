@@ -1,4 +1,6 @@
 import os
+import ast
+import json
 from itertools import cycle
 from gymnasium import logger, Wrapper
 
@@ -123,10 +125,25 @@ class AnimationMonitor(Wrapper):
             config=animation_config,
             svg_settings=svg_settings
         )
-
+        str_history = []
+        for i in history:
+            agent_str_history = []
+            for j in i:
+                state_ = ast.literal_eval(j.__str__())
+                agent_str_history.append({'x': state_[0] - 1, 
+                                          'y': state_[1] - 1, 
+                                          "tx": state_[2] - 1, 
+                                          "ty": state_[3] - 1, 
+                                          "step": state_[4],
+                                          "active": state_[5]})
+            str_history.append(agent_str_history)
+        #print(f"animation wrapper {str_history}")
         animation = AnimationDrawer().create_animation(grid_holder)
         with open(name, "w") as f:
             f.write(animation.render())
+        
+        with open(name[:-4] + '.json', 'w') as fout:
+            json.dump(str_history, fout)
 
 
 def main():

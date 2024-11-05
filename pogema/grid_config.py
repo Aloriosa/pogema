@@ -20,6 +20,7 @@ class GridConfig(CommonSettings, ):
     possible_targets_xy: Optional[list] = None
     collision_system: Literal['block_both', 'priority', 'soft'] = 'priority'
     persistent: bool = False
+    non_random_possible_targets: Union[list, str] = None
     observation_type: Literal['POMAPF', 'MAPF', 'default'] = 'default'
     map: Union[list, str] = None
 
@@ -87,6 +88,7 @@ class GridConfig(CommonSettings, ):
     @validator('agents_xy')
     def agents_xy_validation(cls, v, values):
         if v is not None:
+            print(f"grid config values {values}")
             cls.check_positions(v, values['size'])
             values['num_agents'] = len(v)
         return v
