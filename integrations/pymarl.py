@@ -46,6 +46,7 @@ class PyMarlPogema:
         return self.env.get_state()
 
     def get_state_size(self):
+        #print(f"pogema pymarl get_state_size: {self.get_state()}, {self.get_state()}")
         return len(self.get_state())
 
     def get_avail_actions(self):
@@ -63,9 +64,9 @@ class PyMarlPogema:
     def get_total_actions():
         return 5
 
-    def reset(self):
+    def reset(self, **kwargs):
         self._grid_config = self.env.grid_config
-        self._observations, _ = self.env.reset()
+        self._observations, _ = self.env.reset(**kwargs)
         return np.array(self._observations).flatten()
 
     def save_replay(self):

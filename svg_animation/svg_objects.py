@@ -75,3 +75,25 @@ class Animation(SvgObject):
 
     def render(self):
         return f"<{self.tag} {self.render_attributes(self.attributes)}/>"
+
+class Text(SvgObject):
+    """
+    Text class for the SVG.
+    """
+    tag = 'text'
+
+    def __init__(self, text="", **kwargs):
+        super().__init__(**kwargs)
+        # Store the text content separately from attributes
+        self.text_content = text
+        # Apply coordinate transformation for SVG coordinate system
+        if 'y' in self.attributes:
+            self.attributes['y'] = -self.attributes['y']
+
+    def render(self):
+        animations = '\n'.join([a.render() for a in self.animations]) if self.animations else ""
+        
+        # For text elements, we need to render the content between opening and closing tags
+        if animations:
+            return f"<{self.tag} {self.render_attributes(self.attributes)}>{self.text_content}{animations}</{self.tag}>"
+        return f"<{self.tag} {self.render_attributes(self.attributes)}>{self.text_content}</{self.tag}>"

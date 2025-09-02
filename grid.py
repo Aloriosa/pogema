@@ -56,7 +56,7 @@ class Grid:
 
         if not self.starts_xy or not self.finishes_xy or len(self.starts_xy) != len(self.finishes_xy):
             raise OverflowError(
-                "Can't create task. Please check grid grid_config, especially density, num_agent and map.")
+                f"Can't create task. not {self.starts_xy} or not {self.finishes_xy} or {len(self.starts_xy)} != {len(self.finishes_xy)}")
 
         if add_artificial_border:
             self.add_artificial_border()

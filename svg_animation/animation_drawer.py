@@ -3,7 +3,7 @@ import typing
 from dataclasses import dataclass
 
 from pogema import GridConfig
-from pogema.svg_animation.svg_objects import Line, RectangleHref, Animation, Circle, Rectangle
+from pogema.svg_animation.svg_objects import Line, RectangleHref, Animation, Circle, Rectangle, Text
 
 
 @dataclass
@@ -15,6 +15,7 @@ class AnimationConfig:
     uid: typing.Optional[str] = None
     save_every_idx_episode: typing.Optional[int] = 1
     show_grid_lines: bool = True
+    show_time_step: bool = True  # New option to control time step display
 
 
 @dataclass
@@ -32,6 +33,12 @@ class SvgSettings:
     shaded_opacity: float = 0.2
     egocentric_shaded: bool = True
     stroke_dasharray: int = 25
+    
+    # Time step display settings
+    time_step_font_size: int = 44
+    time_step_color: str = '#333333'
+    time_step_background_color: str = '#ffffff'
+    time_step_background_opacity: float = 0.8
 
     colors: tuple = (
         '#c1433c',
@@ -89,6 +96,8 @@ class Drawing:
         .line {{stroke: {self.svg_settings.obstacle_color}; stroke-width: {self.svg_settings.stroke_width};}}
         .agent {{r: {self.svg_settings.r};}}
         .target {{fill: none; stroke-width: {self.svg_settings.stroke_width}; r: {self.svg_settings.r};}}
+        .time-step {{font-family: Arial, sans-serif; font-size: {self.svg_settings.time_step_font_size}px; font-weight: bold; text-anchor: middle; fill: {self.svg_settings.time_step_color};}}
+        .time-step-bg {{fill: {self.svg_settings.time_step_background_color}; opacity: {self.svg_settings.time_step_background_opacity}; rx: 5;}}
         </style>
         '''
 
@@ -120,10 +129,18 @@ class AnimationDrawer:
             if not gh.config.static:
                 self.animate_agents(agents, gh)
                 self.animate_targets(targets, gh)
+        
         if gh.config.show_grid_lines:
             grid_lines = self.create_grid_lines(gh, render_width, render_height)
             for line in grid_lines:
                 drawing.add_element(line)
+        
+        # Add time step counter
+        if gh.config.show_time_step:
+            time_step_elements = self.create_time_step_counter(gh, render_width)
+            for element in time_step_elements:
+                drawing.add_element(element)
+                
         for obj in [*obstacles, *agents, *targets]:
             drawing.add_element(obj)
 
@@ -135,6 +152,57 @@ class AnimationDrawer:
             drawing.add_element(field_of_view)
 
         return drawing
+
+    def create_time_step_counter(self, grid_holder: GridHolder, render_width):
+        """Create time step counter elements (background rectangle and text)"""
+        gh = grid_holder
+
+        # Calculate position at the top center of the drawing area.
+        # The drawing's top is at y=0. We position the counter slightly below that.
+        center_x = render_width / 2
+        counter_y = gh.svg_settings.time_step_font_size / 2
+
+        # Background rectangle dimensions
+        bg_width = 120
+        bg_height = 40
+
+        # Create background rectangle
+        background = Rectangle(
+            x=center_x - bg_width / 2,
+            y=counter_y,
+            width=bg_width,
+            height=bg_height,
+            **{'class': 'time-step-bg'}
+        )
+
+        # Create text element
+        text = Text(
+            x=center_x,
+            y=counter_y + bg_height / 2 + gh.svg_settings.time_step_font_size / 4, # Adjust for vertical alignment
+            text="Step: 0",
+            **{'class': 'time-step'}
+        )
+
+        # Add animation if not static
+        if not gh.config.static:
+            self.animate_time_step_counter(text, gh)
+
+        return [background, text]
+
+    def animate_time_step_counter(self, text_element, grid_holder: GridHolder):
+        """Animate the time step counter text"""
+        gh = grid_holder
+        
+        # Get the maximum episode length from history
+        max_length = max(len(agent_history) for agent_history in gh.history) if gh.history else 0
+        
+        # Create step labels
+        step_labels = [f"Step: {i}" for i in range(max_length)]
+        
+        # Add animation for text content
+        text_element.add_animation(
+            self.compressed_anim('text', step_labels, gh.svg_settings.time_scale)
+        )
 
     @staticmethod
     def fix_point(x, y, length):

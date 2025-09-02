@@ -142,8 +142,8 @@ class AnimationMonitor(Wrapper):
         with open(name, "w") as f:
             f.write(animation.render())
         
-        with open(name[:-4] + '.json', 'w') as fout:
-            json.dump(str_history, fout)
+        #with open(name[:-4] + '.json', 'w') as fout:
+        #    json.dump(str_history, fout)
 
 
 def main():
