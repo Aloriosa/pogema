@@ -49,6 +49,9 @@ class PogemaBase(gymnasium.Env):
 
         self.action_space: gymnasium.spaces.Discrete = gymnasium.spaces.Discrete(len(self.grid_config.MOVES))
         self._multi_action_sampler = ActionsSampler(self.action_space.n, seed=self.grid_config.seed)
+        self.step_collision = [False] * self.grid_config.num_agents
+        self.action = [None] * self.grid_config.num_agents
+
 
     def _get_agents_obs(self, agent_id=0):
         """
@@ -56,11 +59,15 @@ class PogemaBase(gymnasium.Env):
         :param agent_id:
         :return:
         """
-        return np.concatenate([
+        res = [
             self.grid.get_obstacles_for_agent(agent_id)[None],
             self.grid.get_positions(agent_id)[None],
             self.grid.get_square_target(agent_id)[None]
-        ])
+        ]
+        colors = self.grid.get_colors_for_agent(agent_id)[None]
+        if colors is not None:
+            res.append(colors)
+        return np.concatenate(res)
 
     def check_reset(self):
         """
@@ -98,6 +105,8 @@ class Pogema(PogemaBase):
     def __init__(self, grid_config=GridConfig(num_agents=2)):
         super().__init__(grid_config)
         self.was_on_goal = None
+        self.is_on_goal = None
+        
         full_size = self.grid_config.obs_radius * 2 + 1
         if self.grid_config.observation_type == 'default':
             self.observation_space = gymnasium.spaces.Box(-1.0, 1.0, shape=(3, full_size, full_size))
@@ -107,60 +116,67 @@ class Pogema(PogemaBase):
                 agents=gymnasium.spaces.Box(0.0, 1.0, shape=(full_size, full_size)),
                 xy=gymnasium.spaces.Box(low=-1024, high=1024, shape=(2,), dtype=int),
                 target_xy=gymnasium.spaces.Box(low=-1024, high=1024, shape=(2,), dtype=int),
+                
             )
+        
         elif self.grid_config.observation_type == 'MAPF':
+            
             self.observation_space: gymnasium.spaces.Dict = gymnasium.spaces.Dict(
-                obstacles=gymnasium.spaces.Box(0.0, 1.0, shape=(full_size, full_size)),
-                agents=gymnasium.spaces.Box(0.0, 1.0, shape=(full_size, full_size)),
-                xy=gymnasium.spaces.Box(low=-1024, high=1024, shape=(2,), dtype=int),
-                target_xy=gymnasium.spaces.Box(low=-1024, high=1024, shape=(2,), dtype=int),
-                # global_obstacles=None, # todo define shapes of global state variables
-                # global_xy=None,
-                # global_target_xy=None,
+            obstacles=gymnasium.spaces.Box(0.0, 1.0, shape=(full_size, full_size)),
+            agents=gymnasium.spaces.Box(0.0, 1.0, shape=(full_size, full_size)),
+            xy=gymnasium.spaces.Box(low=-1024, high=1024, shape=(2,), dtype=int),
+            target_xy=gymnasium.spaces.Box(low=-1024, high=1024, shape=(2,), dtype=int),
+            
             )
         else:
             raise ValueError(f"Unknown observation type: {self.grid.config.observation_type}")
 
     def step(self, action: list):
         assert len(action) == self.grid_config.num_agents
-        rewards = []
+        
+        self.step_collision = [False] * self.grid_config.num_agents
 
-        terminated = []
-
-        self.move_agents(action)
         self.update_was_on_goal()
 
         for agent_idx in range(self.grid_config.num_agents):
+            if self.was_on_goal[agent_idx]:
+                action[agent_idx] = 0
 
-            on_goal = self.grid.on_goal(agent_idx)
-            if on_goal and self.grid.is_active[agent_idx]:
-                rewards.append(1.0)
-            else:
-                rewards.append(0.0)
-            terminated.append(on_goal)
+        action = self.move_agents(action)
+        self.action = action
 
+        rewards = [0.0] * self.grid_config.num_agents
         for agent_idx in range(self.grid_config.num_agents):
-            if self.grid.on_goal(agent_idx):
-                self.grid.hide_agent(agent_idx)
-                self.grid.is_active[agent_idx] = False
-
+            if self.was_on_goal[agent_idx] == True:
+                rewards[agent_idx] = -1.0
+            else:
+                if self.grid.on_goal(agent_idx):
+                    rewards[agent_idx] = 1.0
+        if all([self.grid.on_goal(agent_idx) for agent_idx in range(self.grid_config.num_agents)]):
+            terminated = [True] * self.grid_config.num_agents
+        else:
+            terminated = [False] * self.grid_config.num_agents
         infos = self._get_infos()
 
         observations = self._obs()
         truncated = [False] * self.grid_config.num_agents
+        self.is_on_goal = [self.grid.on_goal(agent_idx) for agent_idx in range(self.grid_config.num_agents)]
         return observations, rewards, terminated, truncated, infos
 
     def _initialize_grid(self):
         self.grid: Grid = Grid(grid_config=self.grid_config)
 
+    
     def update_was_on_goal(self):
-        self.was_on_goal = [self.grid.on_goal(agent_idx) and self.grid.is_active[agent_idx]
+        self.was_on_goal = [self.grid.on_goal(agent_idx)
                             for agent_idx in range(self.grid_config.num_agents)]
+
 
     def reset(self, seed: Optional[int] = None, return_info: bool = True, options: Optional[dict] = None, ):
         self._initialize_grid()
         self.update_was_on_goal()
-
+        self.is_on_goal = [self.grid.on_goal(agent_idx) for agent_idx in range(self.grid_config.num_agents)]
+        
         if seed is not None:
             self.grid.seed = seed
 
@@ -179,12 +195,15 @@ class Pogema(PogemaBase):
             global_obstacles = self.grid.get_obstacles()
             global_agents_xy = self.grid.get_agents_xy()
             global_targets_xy = self.grid.get_targets_xy()
+            global_colors = self.grid.get_colors()
 
             for agent_idx in range(self.grid_config.num_agents):
                 result = results[agent_idx]
                 result.update(global_obstacles=global_obstacles)
                 result['global_xy'] = global_agents_xy[agent_idx]
                 result['global_target_xy'] = global_targets_xy[agent_idx]
+                if global_colors is not None:
+                    result['global_colors'] = global_colors[agent_idx]
 
             return results
         else:
@@ -199,8 +218,11 @@ class Pogema(PogemaBase):
             result = {'obstacles': self.grid.get_obstacles_for_agent(agent_idx),
                       'agents': self.grid.get_positions(agent_idx),
                       'xy': agents_xy_relative[agent_idx],
-                      'target_xy': targets_xy_relative[agent_idx]}
-
+                      'target_xy': targets_xy_relative[agent_idx],
+                      }
+            colors = self.grid.get_colors_for_agent(agent_idx)
+            if colors is not None:
+                result['colors'] = colors
             results.append(result)
         return results
 
@@ -208,6 +230,15 @@ class Pogema(PogemaBase):
         infos = [dict() for _ in range(self.grid_config.num_agents)]
         for agent_idx in range(self.grid_config.num_agents):
             infos[agent_idx]['is_active'] = self.grid.is_active[agent_idx]
+            infos[agent_idx]['step_collision'] = self.step_collision[agent_idx]
+            infos[agent_idx]['action'] = self.action[agent_idx]
+            infos[agent_idx]['on_goal'] = self.grid.on_goal(agent_idx)
+            infos[agent_idx]['was_on_goal'] = self.was_on_goal[agent_idx]
+            infos[agent_idx]['agent_idx'] = agent_idx
+            
+        # reset collision values
+        self.step_collision = [False] * self.grid_config.num_agents
+        self.action = [None] * self.grid_config.num_agents
         return infos
 
     def _revert_action(self, agent_idx, used_cells, cell, actions):
@@ -240,6 +271,11 @@ class Pogema(PogemaBase):
                     dx, dy = self.grid_config.MOVES[actions[agent_idx]]
                     if used_cells.get((x + dx, y + dy), None) != 'blocked':
                         self.grid.move(agent_idx, actions[agent_idx])
+                    else:
+                        
+                        if actions[agent_idx]!=0:
+                            self.step_collision[agent_idx] = True
+                            actions[agent_idx] = 0
         elif self.grid.config.collision_system == 'soft':
             used_cells = dict()
             used_edges = dict()
@@ -267,8 +303,10 @@ class Pogema(PogemaBase):
             for agent_idx in range(self.grid_config.num_agents):
                 if self.grid.is_active[agent_idx]:
                     self.grid.move_without_checks(agent_idx, actions[agent_idx])
+
         else:
             raise ValueError('Unknown collision system: {}'.format(self.grid.config.collision_system))
+        return actions
 
     def get_agents_xy_relative(self):
         return self.grid.get_agents_xy_relative()
@@ -278,6 +316,9 @@ class Pogema(PogemaBase):
 
     def get_obstacles(self, ignore_borders=False):
         return self.grid.get_obstacles(ignore_borders=ignore_borders)
+    
+    def get_colors(self, ignore_borders=False):
+        return self.grid.get_colors(ignore_borders=ignore_borders)
 
     def get_agents_xy(self, only_active=False, ignore_borders=False):
         return self.grid.get_agents_xy(only_active=only_active, ignore_borders=ignore_borders)
@@ -312,56 +353,22 @@ class PogemaLifeLong(Pogema):
                                     self.grid.point_to_component,
                                     self.grid.component_to_points,
                                     self.grid.positions_xy[agent_idx])
-    """
-    def _generate_new_target(self, agent_idx):
-        if self.grid_config.non_random_possible_targets != False:
-            print(f"\n\nnon_random_possible_targets is not implemented\n\n")
-            pass
-            '''
-            # for 2-agent envs
-            curr_other_goals = [i for idx, i in enumerate(self.grid.finishes_xy) if idx != agent_idx] #[agent_idx]
-            curr_pos = self.grid.positions_xy[agent_idx]
-            def _gen(rnd_generator, possible_positions, position):
-                new_x = rnd_generator.choice(possible_positions, 1)[0]
-                while new_target == position:
-                    new_target = rnd_generator.choice(possible_positions, 1)[0]
-                return new_target
-
-            
-            new_goal = _gen(self.random_generators[agent_idx],
-                              self.grid_config.non_random_possible_targets[agent_idx],
-                              self.grid.positions_xy[agent_idx][0])
-            
-            
-        
-
-            
-            if new_goal == curr_pos:
-                new_goal = self.grid_config.possible_targets_xy[1]
     
-            return (new_goal[0] + self.grid_config.obs_radius, new_goal[1] + self.grid_config.obs_radius)
-            '''
-        elif self.grid_config.possible_targets_xy is not None:
-            new_goal = generate_from_possible_targets(self.random_generators[agent_idx], 
-                                                     self.grid_config.possible_targets_xy, 
-                                                     self.grid.positions_xy[agent_idx])
-            return (new_goal[0] + self.grid_config.obs_radius, new_goal[1] + self.grid_config.obs_radius)
-        else:
-            return generate_new_target(self.random_generators[agent_idx],
-                                    self.grid.point_to_component,
-                                    self.grid.component_to_points,
-                                    self.grid.positions_xy[agent_idx])
-    """
 
-    
     def step(self, action: list):
         assert len(action) == self.grid_config.num_agents
+        assert all(self.grid.is_active.values()), f" nonactive agents: {self.grid.is_active}"
         rewards = []
 
-        infos = [dict() for _ in range(self.grid_config.num_agents)]
+        self.step_collision = [False] * self.grid_config.num_agents
 
-        self.move_agents(action)
         self.update_was_on_goal()
+
+        infos = [dict() for _ in range(self.grid_config.num_agents)]
+        
+        action = self.move_agents(action)
+        self.action = action
+        
 
         for agent_idx in range(self.grid_config.num_agents):
             on_goal = self.grid.on_goal(agent_idx)
@@ -375,11 +382,18 @@ class PogemaLifeLong(Pogema):
 
         for agent_idx in range(self.grid_config.num_agents):
             infos[agent_idx]['is_active'] = self.grid.is_active[agent_idx]
+            infos[agent_idx]['step_collision'] = self.step_collision[agent_idx]
+            infos[agent_idx]['action'] = self.action[agent_idx]
+        # reset collision values
+        self.step_collision = [False] * self.grid_config.num_agents
+        self.action = [None] * self.grid_config.num_agents
 
         obs = self._obs()
 
         terminated = [False] * self.grid_config.num_agents
         truncated = [False] * self.grid_config.num_agents
+        self.is_on_goal = [self.grid.on_goal(agent_idx) for agent_idx in range(self.grid_config.num_agents)]
+        
         return obs, rewards, terminated, truncated, infos
 
 
@@ -396,20 +410,273 @@ class PogemaCoopFinish(Pogema):
         assert len(action) == self.grid_config.num_agents
 
         infos = [dict() for _ in range(self.grid_config.num_agents)]
-
-        self.move_agents(action)
+        self.step_collision = [False] * self.grid_config.num_agents
+        
+        action = self.move_agents(action)
+        self.action = action
         self.update_was_on_goal()
 
         is_task_solved = all(self.was_on_goal)
         for agent_idx in range(self.grid_config.num_agents):
             infos[agent_idx]['is_active'] = self.grid.is_active[agent_idx]
-
+            infos[agent_idx]['step_collision'] = self.step_collision[agent_idx]
+            infos[agent_idx]['action'] = self.action[agent_idx]
+        # reset collision values
+        self.step_collision = [False] * self.grid_config.num_agents
+        self.action = [None] * self.grid_config.num_agents
         obs = self._obs()
 
         terminated = [is_task_solved] * self.grid_config.num_agents
         truncated = [False] * self.grid_config.num_agents
         rewards = [1.0 if is_task_solved else 0.0 for _ in range(self.grid_config.num_agents)]
         return obs, rewards, terminated, truncated, infos
+
+
+class PogemaTMaze(PogemaBase):
+    def __init__(self, grid_config=GridConfig(num_agents=2)):
+        super().__init__(grid_config)
+        self.was_on_goal = None
+        self.is_on_goal = None
+        self.oracle_idx = None
+        self.acting_idx = None
+        self.episode_step = 0
+        self.maze_len = None
+        full_size = self.grid_config.obs_radius * 2 + 1
+        if self.grid_config.observation_type == 'POMAPF':
+            self.observation_space: gymnasium.spaces.Dict = gymnasium.spaces.Dict(
+                obstacles=gymnasium.spaces.Box(0.0, 1.0, shape=(full_size, full_size)),
+                agents=gymnasium.spaces.Box(0.0, 1.0, shape=(full_size, full_size)),
+                xy=gymnasium.spaces.Box(low=-1024, high=1024, shape=(2,), dtype=int),
+                hint=gymnasium.spaces.Box(low=0., high=2., shape=(full_size, full_size)
+                                          ),
+            )
+        else:
+            raise ValueError(f"Unknown observation type: {self.grid.config.observation_type}")
+        
+        self.hint = np.zeros((full_size, full_size), dtype=np.float32)
+        self.full_size = full_size
+        
+    def step(self, action: list):
+        self.episode_step += 1
+        assert len(action) == self.grid_config.num_agents
+        assert self.oracle_idx is not None, "step: oracle is not defined!!!"
+        assert self.acting_idx is not None, "step: acting_idx is not defined!!!"
+        
+        assert self.maze_len is not None, f"no maze len!!!"
+        self.update_was_on_goal()
+        
+        action[self.oracle_idx] = 0
+        if self.episode_step < self.maze_len:
+            action[self.acting_idx] = 0
+
+        action = self.move_agents(action)
+        self.action = action
+
+        rewards = [0.0] * self.grid_config.num_agents
+        terminated = [False] * self.grid_config.num_agents
+        if self.episode_step >= self.maze_len:
+            terminated = [True] * self.grid_config.num_agents
+            if self.grid.on_goal(self.acting_idx):
+                rewards = [1.0] * self.grid_config.num_agents
+                
+            else:
+                rewards = [-1.0] * self.grid_config.num_agents
+                
+        
+        
+        infos = self._get_infos()
+
+        observations = self._obs()
+        truncated = [False] * self.grid_config.num_agents
+
+        self.is_on_goal = [self.grid.on_goal(agent_idx) for agent_idx in range(self.grid_config.num_agents)]
+        return observations, rewards, terminated, truncated, infos
+
+    def update_was_on_goal(self):
+        self.was_on_goal = [self.grid.on_goal(agent_idx)
+                            for agent_idx in range(self.grid_config.num_agents)]
+
+
+    def _initialize_grid(self):
+        self.grid: Grid = Grid(grid_config=self.grid_config)
+        self.maze_len = self.grid.config.max_episode_steps if self.grid.config.max_episode_steps is not None else None
+        if self.grid.config.map_name == 't-maze-u16':
+            self.hint = np.ones((self.full_size, self.full_size), dtype=np.float32)
+        elif self.grid.config.map_name == 't-maze-d16':
+            self.hint = 2.0 * np.ones((self.full_size, self.full_size), dtype=np.float32)
+        else:
+            raise ValueError(f"Unknown map_name: {self.grid.config.map_name}")    
+        for idx, start_xy, finish_xy in zip(range(len(self.grid.starts_xy)), self.grid.starts_xy, self.grid.finishes_xy):
+            s_x, s_y = start_xy
+            f_x, f_y = finish_xy
+            if s_x == f_x and abs(s_y-f_y) == 1:
+                self.grid.obstacles[f_x, f_y] = self.grid_config.OBSTACLE
+                break
+        self.oracle_idx = idx
+        self.acting_idx = 1 - idx
+        self.grid.finishes_xy[self.oracle_idx] = self.grid.starts_xy[self.oracle_idx]
+
+
+    def reset(self, seed: Optional[int] = None, return_info: bool = True, options: Optional[dict] = None, ):
+        self._initialize_grid()
+        self.update_was_on_goal()
+        self.is_on_goal = [self.grid.on_goal(agent_idx) for agent_idx in range(self.grid_config.num_agents)]
+        
+        if seed is not None:
+            self.grid.seed = seed
+        self.episode_step = 0
+        if return_info:
+            return self._obs(), self._get_infos()
+        return self._obs()
+
+    def _obs(self):
+        if self.grid_config.observation_type == 'default':
+            return [self._get_agents_obs(index) for index in range(self.grid_config.num_agents)]
+        elif self.grid_config.observation_type == 'POMAPF':
+            return self._pomapf_obs()
+
+        elif self.grid_config.observation_type == 'MAPF':
+            results = self._pomapf_obs()
+            global_obstacles = self.grid.get_obstacles()
+            global_agents_xy = self.grid.get_agents_xy()
+            global_targets_xy = self.grid.get_targets_xy()
+            global_colors = self.grid.get_colors()
+
+            for agent_idx in range(self.grid_config.num_agents):
+                result = results[agent_idx]
+                result.update(global_obstacles=global_obstacles)
+                result['global_xy'] = global_agents_xy[agent_idx]
+                result['global_target_xy'] = global_targets_xy[agent_idx]
+                if global_colors is not None:
+                    result['global_colors'] = global_colors[agent_idx]
+
+            return results
+        else:
+            raise ValueError(f"Unknown observation type: {self.grid.config.observation_type}")
+
+    def _pomapf_obs(self):
+        results = []
+        
+        assert self.oracle_idx is not None, "oracle is not defined!!!"
+        assert self.acting_idx is not None, "acting_idx is not defined!!!"
+        
+        agents_xy_relative = self.grid.get_agents_xy_relative()
+        targets_xy_relative = self.grid.get_targets_xy_relative()
+
+        for agent_idx in range(self.grid_config.num_agents):
+            result = {'obstacles': self.grid.get_obstacles_for_agent(agent_idx),
+                      'agents': self.grid.get_positions(agent_idx),
+                      'xy': agents_xy_relative[agent_idx],
+                      'hint': self.hint if agent_idx == self.oracle_idx else np.zeros((self.full_size, self.full_size), dtype=np.float32)
+                      }
+            colors = self.grid.get_colors_for_agent(agent_idx)
+            if colors is not None:
+                result['colors'] = colors
+            results.append(result)
+        return results
+
+    def _get_infos(self):
+        infos = [dict() for _ in range(self.grid_config.num_agents)]
+        for agent_idx in range(self.grid_config.num_agents):
+            infos[agent_idx]['is_active'] = self.grid.is_active[agent_idx]
+            infos[agent_idx]['step_collision'] = self.step_collision[agent_idx]
+            infos[agent_idx]['action'] = self.action[agent_idx]
+            infos[agent_idx]['on_goal'] = self.grid.on_goal(agent_idx)
+            infos[agent_idx]['was_on_goal'] = self.was_on_goal[agent_idx]
+            infos[agent_idx]['agent_idx'] = agent_idx
+            
+        self.step_collision = [False] * self.grid_config.num_agents
+        self.action = [None] * self.grid_config.num_agents
+        return infos
+
+    def _revert_action(self, agent_idx, used_cells, cell, actions):
+        actions[agent_idx] = 0
+        used_cells[cell].remove(agent_idx)
+        new_cell = self.grid.positions_xy[agent_idx]
+        if new_cell in used_cells and len(used_cells[new_cell]) > 0:
+            used_cells[new_cell].append(agent_idx)
+            return self._revert_action(used_cells[new_cell][0], used_cells, new_cell, actions)
+        else:
+            used_cells.setdefault(new_cell, []).append(agent_idx)
+        return actions, used_cells
+
+    def move_agents(self, actions):
+        if self.grid.config.collision_system == 'priority':
+            for agent_idx in range(self.grid_config.num_agents):
+                if self.grid.is_active[agent_idx]:
+                    self.grid.move(agent_idx, actions[agent_idx])
+        elif self.grid.config.collision_system == 'block_both':
+            used_cells = {}
+            agents_xy = self.grid.get_agents_xy()
+            for agent_idx, (x, y) in enumerate(agents_xy):
+                if self.grid.is_active[agent_idx]:
+                    dx, dy = self.grid_config.MOVES[actions[agent_idx]]
+                    used_cells[x + dx, y + dy] = 'blocked' if (x + dx, y + dy) in used_cells else 'visited'
+                    used_cells[x, y] = 'blocked'
+            for agent_idx in range(self.grid_config.num_agents):
+                if self.grid.is_active[agent_idx]:
+                    x, y = agents_xy[agent_idx]
+                    dx, dy = self.grid_config.MOVES[actions[agent_idx]]
+                    if used_cells.get((x + dx, y + dy), None) != 'blocked':
+                        self.grid.move(agent_idx, actions[agent_idx])
+                    else:
+                        
+                        if actions[agent_idx]!=0:
+                            self.step_collision[agent_idx] = True
+                            actions[agent_idx] = 0
+        elif self.grid.config.collision_system == 'soft':
+            used_cells = dict()
+            used_edges = dict()
+            agents_xy = self.grid.get_agents_xy()
+            for agent_idx, (x, y) in enumerate(agents_xy):
+                if self.grid.is_active[agent_idx]:
+                    dx, dy = self.grid.config.MOVES[actions[agent_idx]]
+                    used_cells.setdefault((x + dx, y + dy), []).append(agent_idx)
+                    used_edges[x, y, x + dx, y + dy] = [agent_idx]
+                    if dx != 0 or dy != 0:
+                        used_edges.setdefault((x + dx, y + dy, x, y), []).append(agent_idx)
+            for agent_idx, (x, y) in enumerate(agents_xy):
+                if self.grid.is_active[agent_idx]:
+                    dx, dy = self.grid.config.MOVES[actions[agent_idx]]
+                    if len(used_edges[x, y, x + dx, y + dy]) > 1:
+                        used_cells[x + dx, y + dy].remove(agent_idx)
+                        used_cells.setdefault((x, y), []).append(agent_idx)
+                        actions[agent_idx] = 0
+            for agent_idx in reversed(range(len(agents_xy))):
+                x, y = agents_xy[agent_idx]
+                if self.grid.is_active[agent_idx]:
+                    dx, dy = self.grid.config.MOVES[actions[agent_idx]]
+                    if len(used_cells[x + dx, y + dy]) > 1 or self.grid.has_obstacle(x + dx, y + dy):
+                        actions, used_cells = self._revert_action(agent_idx, used_cells, (x + dx, y + dy), actions)
+            for agent_idx in range(self.grid_config.num_agents):
+                if self.grid.is_active[agent_idx]:
+                    self.grid.move_without_checks(agent_idx, actions[agent_idx])
+
+        else:
+            raise ValueError('Unknown collision system: {}'.format(self.grid.config.collision_system))
+        return actions
+
+    def get_agents_xy_relative(self):
+        return self.grid.get_agents_xy_relative()
+
+    def get_targets_xy_relative(self):
+        return self.grid.get_targets_xy_relative()
+
+    def get_obstacles(self, ignore_borders=False):
+        return self.grid.get_obstacles(ignore_borders=ignore_borders)
+    
+    def get_colors(self, ignore_borders=False):
+        return self.grid.get_colors(ignore_borders=ignore_borders)
+
+    def get_agents_xy(self, only_active=False, ignore_borders=False):
+        return self.grid.get_agents_xy(only_active=only_active, ignore_borders=ignore_borders)
+
+    def get_targets_xy(self, only_active=False, ignore_borders=False):
+        return self.grid.get_targets_xy(only_active=only_active, ignore_borders=ignore_borders)
+
+    def get_state(self, ignore_borders=False, as_dict=False):
+        return self.grid.get_state(ignore_borders=ignore_borders, as_dict=as_dict)
+
 
 
 def _make_pogema(grid_config):
@@ -419,6 +686,8 @@ def _make_pogema(grid_config):
         env = PogemaCoopFinish(grid_config=grid_config)
     elif grid_config.on_target == 'finish':
         env = Pogema(grid_config=grid_config)
+    elif grid_config.on_target == 't-maze':
+        env = PogemaTMaze(grid_config=grid_config)
     else:
         raise KeyError(f'Unknown on_target option: {grid_config.on_target}')
 
@@ -435,6 +704,11 @@ def _make_pogema(grid_config):
             env = NonDisappearEpLengthMetric(env)
             env = SumOfCostsAndMakespanMetric(env)
         elif grid_config.on_target == 'finish':
+            env = ISRMetric(env)
+            env = CSRMetric(env)
+            env = EpLengthMetric(env)
+            env = SumOfCostsAndMakespanMetric(env)
+        elif grid_config.on_target == 't-maze':
             env = ISRMetric(env)
             env = CSRMetric(env)
             env = EpLengthMetric(env)
